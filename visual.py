@@ -125,9 +125,9 @@ def transformer_attention_matrix(case=0):
     tgt = data["tgt"][case]
     attentions = data["attentions"]
 
-    encoder_atten = attentions["encoder"]
-    decoder_tgt_atten = attentions["decoder"]["mh1"]
-    decoder_src_atten = attentions["decoder"]["mh2"]
+    encoder_atten = np.array(attentions["encoder"])
+    decoder_src_atten = np.array(attentions["decoder"]["mh2"])
+    decoder_tgt_atten = np.array(attentions["decoder"]["mh1"])
     plt.rcParams['xtick.bottom'] = plt.rcParams['xtick.labelbottom'] = False
     plt.rcParams['xtick.top'] = plt.rcParams['xtick.labeltop'] = True
 
@@ -192,8 +192,8 @@ def transformer_attention_line(case=0):
 
     decoder_src_atten = attentions["decoder"]["mh2"]
 
-    tgt_label = tgt[1:11][::-1]
-    src_label = ["" for _ in range(2)] + src[::-1]
+    tgt_label = tgt[0:11][::-1]
+    src_label = ["" for _ in range(3)] + src[::-1]
     fig, ax = plt.subplots(nrows=2, ncols=2, sharex=True, figsize=(7, 14))
 
     for i in range(2):
@@ -204,13 +204,14 @@ def transformer_attention_line(case=0):
             ax_ = ax[i, j].twinx()
             ax_.set_yticks(np.linspace(ax_.get_yticks()[0], ax_.get_yticks()[-1], len(ax[i, j].get_yticks())))
             ax_.set_yticklabels(tgt_label, fontsize=9)      # tgt
-            img = decoder_src_atten[-1][case, i + j][:10, :8]
+            img = decoder_src_atten[-1][case, i + j][:11, :8]
             color = cm.rainbow(np.linspace(0, 1, img.shape[0]))
             left_top, right_top = img.shape[1], img.shape[0]
             for ri, c in zip(range(right_top), color):      # tgt
                 for li in range(left_top):                 # src
-                    alpha = (img[ri, li] / img[ri].max()) ** 8
-                    ax[i, j].plot([0, 1], [left_top - li + 1, right_top - 1 - ri], alpha=alpha, c=c)
+                    alpha = min((img[ri, li]-img[ri].min()) / (img[ri].max()-img[ri].min())+img[ri].min(), 1)
+                    #ax[i, j].plot([0, 1], [left_top - li + 1, right_top - 1 - ri], alpha=alpha, c=c)
+                    ax[i, j].plot([0, 1], [left_top - li+2, right_top - 1 - ri], alpha=alpha, c=c)
             ax[i, j].set_xticks(())
             ax[i, j].set_xlabel("head %i" % (j + 1 + i * 2))
             ax[i, j].set_xlim(0, 1)

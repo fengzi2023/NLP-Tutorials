@@ -102,9 +102,11 @@ class DecoderLayer(keras.layers.Layer):
         self.mh = [MultiHead(n_head, model_dim, drop_rate) for _ in range(2)]
         self.ffn = PositionWiseFFN(model_dim)
 
-    def call(self, yz, xz, training, yz_look_ahead_mask, xz_pad_mask):
+    def call(self, yz, xz, training, yz_look_ahead_mask, xz_pad_mask, target_step=-1):
         attn = self.mh[0].call(yz, yz, yz, yz_look_ahead_mask, training)       # decoder self attention
         o1 = self.ln[0](attn + yz)
+        if target_step > 0:
+            o1 = o1[:, target_step:target_step+1, :] # 只有最后一层可以做截断优化
         attn = self.mh[1].call(o1, xz, xz, xz_pad_mask, training)       # decoder + encoder attention
         o2 = self.ln[1](attn + o1)
         ffn = self.drop(self.ffn.call(o2), training)
@@ -117,9 +119,13 @@ class Decoder(keras.layers.Layer):
         super().__init__()
         self.ls = [DecoderLayer(n_head, model_dim, drop_rate) for _ in range(n_layer)]
 
-    def call(self, yz, xz, training, yz_look_ahead_mask, xz_pad_mask):
-        for l in self.ls:
+    def call(self, yz, xz, training, yz_look_ahead_mask, xz_pad_mask, target_step=-1):
+        for i, l in enumerate(self.ls):
+            print("iiiii", i)
             yz = l.call(yz, xz, training, yz_look_ahead_mask, xz_pad_mask)
+            print("yz:",yz.shape)
+
+        yz = self.ls[-1].call(yz, xz, training, yz_look_ahead_mask, xz_pad_mask, target_step=target_step)
         return yz
 
 
@@ -167,9 +173,9 @@ class Transformer(keras.Model):
 
     def step(self, x, y):
         with tf.GradientTape() as tape:
-            logits = self.call(x, y[:, :-1], training=True)
+            logits = self.call(x, y[:, :-1], training=True) # 截取最后一个
             pad_mask = tf.math.not_equal(y[:, 1:], self.padding_idx)
-            loss = tf.reduce_mean(tf.boolean_mask(self.cross_entropy(y[:, 1:], logits), pad_mask))
+            loss = tf.reduce_mean(tf.boolean_mask(self.cross_entropy(y[:, 1:], logits), pad_mask)) # 预测是截取第一个
         grads = tape.gradient(loss, self.trainable_variables)
         self.opt.apply_gradients(zip(grads, self.trainable_variables))
         return loss, logits
@@ -203,7 +209,27 @@ class Transformer(keras.Model):
             tgt[:, tgti] = idx
             if tgti >= self.max_len:
                 break
-        return ["".join([i2v[i] for i in tgt[j, 1:tgti]]) for j in range(len(src))]
+        return ["".join([i2v[i] for i in tgt[j, 0:tgti]]) for j in range(len(src))]
+
+    def translate2(self, src, v2i, i2v):
+        src_pad = utils.pad_zero(src, self.max_len)
+        tgt = utils.pad_zero(np.array([[v2i["<GO>"], ] for _ in range(len(src))]), self.max_len+1)
+        tgti = 0
+        x_embed = self.embed(src_pad)
+        encoded_z = self.encoder.call(x_embed, False, mask=self._pad_mask(src_pad))
+        while True:
+            y = tgt[:, :-1]
+            y_embed = self.embed(y)
+            decoded_z = self.decoder.call(
+                y_embed, encoded_z, False, yz_look_ahead_mask=self._look_ahead_mask(y), xz_pad_mask=self._pad_mask(src_pad), target_step=tgti)
+            logits = self.o(decoded_z)[:, 0, :].numpy()
+            idx = np.argmax(logits, axis=1)
+            tgti += 1
+            tgt[:, tgti] = idx
+            if tgti >= self.max_len:
+                break
+        return ["".join([i2v[i] for i in tgt[j, 0:tgti]]) for j in range(len(src))]
+
 
     @property
     def attentions(self):
@@ -230,8 +256,8 @@ def train(model, data, step):
                 "step: ", t,
                 "| time: %.2f" % (t1 - t0),
                 "| loss: %.4f" % loss.numpy(),
-                "| target: ", "".join([data.i2v[i] for i in by[0, 1:10]]),
-                "| inference: ", "".join([data.i2v[i] for i in np.argmax(logits, axis=1)[:10]]),
+                "| target: ", "".join([data.i2v[i] for i in by[0, :]]),
+                "| inference: ", "".join([data.i2v[i] for i in np.argmax(logits, axis=1)[:]]),
             )
             t0 = t1
 
@@ -242,12 +268,18 @@ def train(model, data, step):
         pickle.dump({"v2i": data.v2i, "i2v": data.i2v}, f)
 
 
+
 def export_attention(model, data, name="transformer"):
     with open("./visual/tmp/transformer_v2i_i2v.pkl", "rb") as f:
         dic = pickle.load(f)
     model.load_weights("./visual/models/transformer/model.ckpt")
     bx, by, seq_len = data.sample(32)
-    model.translate(bx, dic["v2i"], dic["i2v"])
+    by_ = model.translate(bx, dic["v2i"], dic["i2v"])
+
+    print("src:", data.idx2str(bx[0]))
+    print("target:", data.idx2str(by[0]))
+    print("pred:", by_[0])
+
     attn_data = {
         "src": [[data.i2v[i] for i in bx[j]] for j in range(len(bx))],
         "tgt": [[data.i2v[i] for i in by[j]] for j in range(len(by))],
@@ -267,5 +299,5 @@ if __name__ == "__main__":
           "\ny index sample: \n{}\n{}".format(d.idx2str(d.y[0]), d.y[0]))
 
     m = Transformer(MODEL_DIM, MAX_LEN, N_LAYER, N_HEAD, d.num_word, DROP_RATE)
-    train(m, d, step=800)
+    #train(m, d, step=800)
     export_attention(m, d)

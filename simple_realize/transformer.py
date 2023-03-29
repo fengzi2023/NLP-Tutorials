@@ -72,7 +72,8 @@ class EncodeLayer(keras.layers.Layer):
         model_dim = input_shape[-1]
         self.ln = [keras.layers.LayerNormalization() for _ in range(2)]
         self.mh = MultiHead(self.n_head)
-        self.ffn = PositionWiseFFN(model_dim)
+        #self.ffn = PositionWiseFFN(model_dim)
+        self.ffn = PositionWiseFFN()
         super(EncodeLayer, self).build(input_shape)
 
     def call(self, inputs, mask=None, **kwargs):
@@ -107,7 +108,8 @@ class DecoderLayer(keras.layers.Layer):
 
     def build(self, input_shape):
         self.mh = [MultiHead(self.n_head) for _ in range(2)]
-        self.ffn = PositionWiseFFN(input_shape[-1])
+        #self.ffn = PositionWiseFFN(input_shape[-1])
+        self.ffn = PositionWiseFFN()
         self.ln = [keras.layers.LayerNormalization() for i in range(3)]
         super(DecoderLayer, self).build(input_shape)
 
